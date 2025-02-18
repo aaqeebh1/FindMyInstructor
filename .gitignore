@@ -3,3 +3,7 @@
 
 # Ignore node modules directory
 node_modules/
+
+.gitignore/
+
+test.js
