@@ -1,9 +1,16 @@
-// src/config/passport.js
 import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import bcrypt from "bcrypt";
 import sql from "./db.js";
+
+// Improved helper function to ensure no undefined values
+const safeValue = (value) => {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return value;
+};
 
 passport.use(
   new LocalStrategy(
@@ -48,7 +55,13 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        // Check if user exists
+        
+        // Make sure we have safe values for tokens
+        const safeAccessToken = safeValue(accessToken);
+        const safeRefreshToken = safeValue(refreshToken);
+
+
+        // Check if user exists by OAuth connection
         let users = await sql`
           SELECT u.* FROM users u
           JOIN oauth_connections o ON u.id = o.user_id
@@ -58,23 +71,47 @@ passport.use(
         let user = users[0];
 
         if (!user) {
-          // Create new user if doesn't exist
-          const newUsers = await sql`
-            INSERT INTO users (
-              name, 
-              email, 
-              password,
-              role
-            ) VALUES (
-              ${profile.displayName},
-              ${profile.emails[0].value},
-              ${await bcrypt.hash(Math.random().toString(36), 10)},
-              'learner'
-            )
-            RETURNING *
+          // Check if user exists by email
+          const email =
+            profile.emails && profile.emails[0]
+              ? profile.emails[0].value
+              : null;
+
+          if (!email) {
+            return done(new Error("No email provided from Google OAuth"), null);
+          }
+
+          users = await sql`
+            SELECT * FROM users WHERE email = ${email}
           `;
 
-          user = newUsers[0];
+          user = users[0];
+
+          if (!user) {
+            // Create new user if doesn't exist
+            const displayName = profile.displayName || "Google User";
+            const randomPassword = await bcrypt.hash(
+              Math.random().toString(36),
+              10
+            );
+
+            const newUsers = await sql`
+              INSERT INTO users (
+                name, 
+                email, 
+                password,
+                role
+              ) VALUES (
+                ${displayName},
+                ${email},
+                ${randomPassword},
+                'learner'
+              )
+              RETURNING *
+            `;
+
+            user = newUsers[0];
+          }
 
           // Create OAuth connection
           await sql`
@@ -88,14 +125,25 @@ passport.use(
               ${user.id},
               'google',
               ${profile.id},
-              ${accessToken},
-              ${refreshToken}
+              ${safeAccessToken},
+              ${safeRefreshToken}
             )
+          `;
+        } else {
+          // Update OAuth connection with new tokens
+          await sql`
+            UPDATE oauth_connections
+            SET 
+              access_token = ${safeAccessToken}, 
+              refresh_token = ${safeRefreshToken}
+            WHERE user_id = ${user.id} AND provider = 'google'
           `;
         }
 
+
         return done(null, user);
       } catch (error) {
+        console.error("Error in Google strategy:", error);
         return done(error);
       }
     }

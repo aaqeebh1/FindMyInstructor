@@ -149,8 +149,25 @@ router.get(
     failureRedirect: "/login",
     session: false,
   }),
-  (req, res) => {
-    // OAuth callback implementation will go here
+  async (req, res) => {
+    try {
+      // At this point, req.user contains the authenticated user from your Google strategy
+      const user = req.user;
+
+      // Generate JWT token
+      const token = generateToken(user);
+
+      // You can now redirect to your frontend with the token
+      // Adjust the frontend URL as needed
+      res.redirect(
+        `${
+          process.env.FRONTEND_URL || "http://localhost:3000"
+        }/oauth-success?token=${token}`
+      );
+    } catch (error) {
+      console.error("Google auth callback error:", error);
+      res.redirect("/login?error=oauth_failed");
+    }
   }
 );
 

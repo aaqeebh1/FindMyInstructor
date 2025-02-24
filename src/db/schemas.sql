@@ -40,3 +40,4 @@ CREATE TABLE oauth_connections (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(provider, provider_user_id)
 );
+
