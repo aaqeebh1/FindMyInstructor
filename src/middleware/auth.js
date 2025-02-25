@@ -27,3 +27,10 @@ export const requireRole = (role) => {
     }
   };
 };
+
+export const checkRole = (req, res, next) => {
+  if (req.user && req.user.role) {
+    return res.redirect("/dashboard");
+  }
+  next();
+};

@@ -56,6 +56,15 @@ async function createTables() {
                 UNIQUE(provider, provider_user_id)
             )
         `;
+    // Session table
+    await sql`
+          CREATE TABLE IF NOT EXISTS "session" (
+            "sid" varchar NOT NULL COLLATE "default",
+            "sess" json NOT NULL,
+            "expire" timestamp(6) NOT NULL,
+            CONSTRAINT "session_pkey" PRIMARY KEY ("sid")
+          ) WITH (OIDS=FALSE);  
+      `;
     console.log("OAuth connections table created successfully");
   } catch (error) {
     console.error("Error creating tables:", error);

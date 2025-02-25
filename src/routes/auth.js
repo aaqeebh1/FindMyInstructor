@@ -42,19 +42,19 @@ router.post("/register", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     // Create user
-    const newUser = await sql`
+    const [newUser] = await sql`
             INSERT INTO users (
                 name,
                 email,
                 password,
-                role
+                auth_type
             ) VALUES (
                 ${name},
                 ${email},
                 ${hashedPassword},
-                ${role}
+                'local'
             )
-            RETURNING id, name, email, role
+            RETURNING *
         `;
 
     // If user is an instructor, create empty instructor profile
@@ -66,7 +66,7 @@ router.post("/register", async (req, res) => {
                     hourly_rate,
                     bio
                 ) VALUES (
-                    ${newUser[0].id},
+                    ${newUser.id},
                     0,
                     0,
                     ''
@@ -75,16 +75,16 @@ router.post("/register", async (req, res) => {
     }
 
     // Generate JWT token
-    const token = generateToken(newUser[0]);
+    const token = generateToken(newUser);
 
     // Send response
     res.status(201).json({
       message: "Registration successful",
       user: {
-        id: newUser[0].id,
-        name: newUser[0].name,
-        email: newUser[0].email,
-        role: newUser[0].role,
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
       },
       token,
     });
@@ -136,34 +136,63 @@ router.post("/login", async (req, res) => {
   }
 });
 
-router.get(
-  "/google",
-  passport.authenticate("google", {
-    scope: ["profile", "email"],
-  })
-);
+
+router.get("/google", (req, res, next) => {
+  // Store selected role in session from query parameter
+  req.session.selectedRole = req.query.role;
+
+  // Save session before redirecting to Google
+  req.session.save((err) => {
+    if (err) {
+      console.error("Session save error:", err);
+      return res.status(500).json({ message: "Error saving session" });
+    }
+    passport.authenticate("google", {
+      scope: ["profile", "email"],
+    })(req, res, next);
+  });
+});
 
 router.get(
   "/google/callback",
+  (req, res, next) => {
+    // Add debugging for session
+    console.log("Session at callback:", req.session);
+    console.log("Selected role from session:", req.session.selectedRole);
+    next();
+  },
   passport.authenticate("google", {
     failureRedirect: "/login",
-    session: false,
+    failureMessage: true,
+    session: true,
   }),
   async (req, res) => {
     try {
-      // At this point, req.user contains the authenticated user from your Google strategy
-      const user = req.user;
+      // Ensure we have user data
+      if (!req.user) {
+        throw new Error("No user data from Google OAuth");
+      }
 
-      // Generate JWT token
-      const token = generateToken(user);
+      // Generate token
+      const token = generateToken({
+        id: req.user.id,
+        email: req.user.email,
+        role: req.user.role,
+      });
 
-      // You can now redirect to your frontend with the token
-      // Adjust the frontend URL as needed
-      res.redirect(
-        `${
-          process.env.FRONTEND_URL || "http://localhost:3000"
-        }/oauth-success?token=${token}`
-      );
+      // Store in session and save
+      req.session.token = token;
+      req.session.user = {
+        id: req.user.id,
+        name: req.user.name,
+        email: req.user.email,
+        role: req.user.role,
+      };
+
+      await req.session.save();
+
+      // Redirect to frontend with token
+      res.redirect(`http://localhost:3000/oauth-success?token=${token}`);
     } catch (error) {
       console.error("Google auth callback error:", error);
       res.redirect("/login?error=oauth_failed");
@@ -171,8 +200,59 @@ router.get(
   }
 );
 
-router.get("/logout", (req, res) => {
-  // Logout implementation will go here
+// Add role selection route
+
+
+// Add a route to debug session data
+router.get("/debug-session", (req, res) => {
+  res.json({
+    sessionID: req.sessionID,
+    user: req.session.user,
+    isAuthenticated: req.isAuthenticated(),
+    session: req.session,
+  });
 });
 
-export default router; 
+router.get("/logout", (req, res) => {
+  // Clear the session
+  req.session.destroy((err) => {
+    if (err) {
+      console.error("Session destruction error:", err);
+      return res.status(500).json({ message: "Error during logout" });
+    }
+
+    // Logout from passport
+    req.logout((err) => {
+      if (err) {
+        console.error("Passport logout error:", err);
+        return res.status(500).json({ message: "Error during logout" });
+      }
+      res.redirect(process.env.FRONTEND_URL || "http://localhost:3000");
+    });
+  });
+});
+
+router.get("/check", (req, res) => {
+  if (req.isAuthenticated() && req.session.user) {
+    res.json({
+      authenticated: true,
+      user: req.session.user,
+    });
+  } else {
+    res.json({
+      authenticated: false,
+    });
+  }
+});
+
+router.get("/test-oauth", (req, res) => {
+  // Simulate Google OAuth user data
+  req.session.tempUser = {
+    id: 999,
+    name: "Test User",
+    email: "test@example.com",
+  };
+  res.redirect("/auth/select-role");
+});
+
+export default router;

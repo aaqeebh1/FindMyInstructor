@@ -52,103 +52,108 @@ passport.use(
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       callbackURL: "/auth/google/callback",
+      passReqToCallback: true,
     },
-    async (accessToken, refreshToken, profile, done) => {
+    async function (req, accessToken, refreshToken, profile, done) {
       try {
-        
-        // Make sure we have safe values for tokens
-        const safeAccessToken = safeValue(accessToken);
-        const safeRefreshToken = safeValue(refreshToken);
+        // First check for existing user
+        const users = await sql`
+    SELECT u.* FROM users u
+    LEFT JOIN oauth_connections o ON u.id = o.user_id
+    WHERE o.provider = 'google' 
+    AND o.provider_user_id = ${profile.id}
+  `;
 
-
-        // Check if user exists by OAuth connection
-        let users = await sql`
-          SELECT u.* FROM users u
-          JOIN oauth_connections o ON u.id = o.user_id
-          WHERE o.provider = 'google' AND o.provider_user_id = ${profile.id}
-        `;
-
-        let user = users[0];
-
-        if (!user) {
-          // Check if user exists by email
-          const email =
-            profile.emails && profile.emails[0]
-              ? profile.emails[0].value
-              : null;
-
-          if (!email) {
-            return done(new Error("No email provided from Google OAuth"), null);
-          }
-
-          users = await sql`
-            SELECT * FROM users WHERE email = ${email}
-          `;
-
-          user = users[0];
-
-          if (!user) {
-            // Create new user if doesn't exist
-            const displayName = profile.displayName || "Google User";
-            const randomPassword = await bcrypt.hash(
-              Math.random().toString(36),
-              10
-            );
-
-            const newUsers = await sql`
-              INSERT INTO users (
-                name, 
-                email, 
-                password,
-                role
-              ) VALUES (
-                ${displayName},
-                ${email},
-                ${randomPassword},
-                'learner'
-              )
-              RETURNING *
-            `;
-
-            user = newUsers[0];
-          }
-
-          // Create OAuth connection
-          await sql`
-            INSERT INTO oauth_connections (
-              user_id,
-              provider,
-              provider_user_id,
-              access_token,
-              refresh_token
-            ) VALUES (
-              ${user.id},
-              'google',
-              ${profile.id},
-              ${safeAccessToken},
-              ${safeRefreshToken}
-            )
-          `;
-        } else {
-          // Update OAuth connection with new tokens
-          await sql`
-            UPDATE oauth_connections
-            SET 
-              access_token = ${safeAccessToken}, 
-              refresh_token = ${safeRefreshToken}
-            WHERE user_id = ${user.id} AND provider = 'google'
-          `;
+        if (users.length > 0) {
+          console.log("Found existing user:", users[0].id);
+          return done(null, users[0]);
         }
 
+        const role = req.session.selectedRole;
+        console.log("Selected role:", role);
 
-        return done(null, user);
+        if (!role) {
+          return done(null, false, { message: "Role not selected" });
+        }
+
+        const emailValue =
+          profile.emails && profile.emails.length > 0
+            ? profile.emails[0].value
+            : null;
+
+        const photoValue =
+          profile.photos && profile.photos.length > 0
+            ? profile.photos[0].value
+            : null;
+
+        // Then use these variables in your query
+        const [newUser] = await sql`
+  INSERT INTO users (
+    name, 
+    email, 
+    avatar_url, 
+    auth_type, 
+    role
+  ) VALUES (
+    ${profile.displayName || "User"},
+    ${emailValue},
+    ${photoValue},
+    'oauth',
+    ${role}
+  )
+  RETURNING *
+`;
+        console.log("Created new user:", newUser.id);
+
+        // Insert OAuth connection
+       const userID = newUser.id;
+       const googleID = profile.id;
+       const accessTokenValue = accessToken || null; // Use null instead of empty string
+       const refreshTokenValue = refreshToken || null; // Use null instead of empty string
+
+       // Then use these variables in your query
+       const [oauthConnection] = await sql`
+  INSERT INTO oauth_connections (
+    user_id,
+    provider,
+    provider_user_id,
+    access_token,
+    refresh_token
+  ) VALUES (
+    ${userID},
+    'google',
+    ${googleID},
+    ${accessTokenValue},
+    ${refreshTokenValue}
+  )
+  RETURNING *
+`;
+        console.log("Created OAuth connection");
+
+        // Create instructor record if needed
+        if (role === "instructor") {
+          await sql`
+    INSERT INTO instructor_profiles (user_id)
+    VALUES (${newUser.id})
+  `;
+          console.log("Created instructor record");
+        }
+        console.log("Debugging values before insert:");
+        console.log("User ID:", newUser.id);
+        console.log("Google ID:", profile.id);
+        console.log("Access Token:", accessToken);
+        console.log("Refresh Token:", refreshToken);
+
+        return done(null, newUser);
       } catch (error) {
-        console.error("Error in Google strategy:", error);
-        return done(error);
+        console.error("Error in Google Strategy:", error);
+        return done(null, false, { message: error.message });
       }
     }
   )
+  
 );
+
 
 // Serialization
 passport.serializeUser((user, done) => {
@@ -157,10 +162,12 @@ passport.serializeUser((user, done) => {
 
 passport.deserializeUser(async (id, done) => {
   try {
-    const users = await sql`
-      SELECT * FROM users WHERE id = ${id}
+    const [user] = await sql`
+      SELECT id, name, email, role 
+      FROM users 
+      WHERE id = ${id}
     `;
-    done(null, users[0]);
+    done(null, user);
   } catch (error) {
     done(error);
   }
