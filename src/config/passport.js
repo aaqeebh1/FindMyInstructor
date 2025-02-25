@@ -17,28 +17,60 @@ passport.use(
     {
       usernameField: "email",
       passwordField: "password",
+      passReqToCallback: true, // Add this to access the request object
     },
-    async (email, password, done) => {
+    async (req, email, password, done) => {
       try {
-        // Find user by email
+        // Validate input
+        if (!email || !password) {
+          return done(null, false, {
+            message: "Email and password are required",
+          });
+        }
+
+        // Find user by email with role information
         const users = await sql`
-          SELECT * FROM users WHERE email = ${email}
+          SELECT u.*, 
+                 CASE 
+                   WHEN i.user_id IS NOT NULL THEN true 
+                   ELSE false 
+                 END as is_instructor
+          FROM users u
+          LEFT JOIN instructors i ON u.id = i.user_id
+          WHERE u.email = ${email} AND u.auth_type = 'local'
         `;
 
         const user = users[0];
 
         if (!user) {
-          return done(null, false, { message: "Incorrect email." });
+          return done(null, false, { message: "Incorrect email or password" });
+        }
+
+        // Check if password exists (in case of OAuth user trying to login with password)
+        if (!user.password) {
+          return done(null, false, {
+            message: "This account uses Google authentication",
+          });
         }
 
         // Check password
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-          return done(null, false, { message: "Incorrect password." });
+          return done(null, false, { message: "Incorrect email or password" });
         }
 
-        return done(null, user);
+        // Clean user object before sending
+        const cleanUser = {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          isInstructor: user.is_instructor,
+        };
+
+        return done(null, cleanUser);
       } catch (error) {
+        console.error("LocalStrategy Error:", error);
         return done(error);
       }
     }
@@ -106,13 +138,13 @@ passport.use(
         console.log("Created new user:", newUser.id);
 
         // Insert OAuth connection
-       const userID = newUser.id;
-       const googleID = profile.id;
-       const accessTokenValue = accessToken || null; // Use null instead of empty string
-       const refreshTokenValue = refreshToken || null; // Use null instead of empty string
+        const userID = newUser.id;
+        const googleID = profile.id;
+        const accessTokenValue = accessToken || null; // Use null instead of empty string
+        const refreshTokenValue = refreshToken || null; // Use null instead of empty string
 
-       // Then use these variables in your query
-       const [oauthConnection] = await sql`
+        // Then use these variables in your query
+        const [oauthConnection] = await sql`
   INSERT INTO oauth_connections (
     user_id,
     provider,
@@ -151,9 +183,7 @@ passport.use(
       }
     }
   )
-  
 );
-
 
 // Serialization
 passport.serializeUser((user, done) => {
