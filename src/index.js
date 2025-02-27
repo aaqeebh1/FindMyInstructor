@@ -28,14 +28,14 @@ app.use(
   session({
     store: new PgSessionStore({
       pool: pool,
-      tableName: "session"  // Make sure this table exists
+      tableName: "session", // Make sure this table exists
     }),
     secret: process.env.SESSION_SECRET || "your-secure-session-secret",
     resave: false,
-    saveUninitialized: true,  // Set to true for OAuth flows
-    cookie: { 
+    saveUninitialized: true, // Set to true for OAuth flows
+    cookie: {
       maxAge: 30 * 24 * 60 * 60 * 1000,
-    }
+    },
   })
 );
 

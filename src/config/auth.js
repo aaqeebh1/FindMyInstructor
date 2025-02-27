@@ -1,6 +1,9 @@
 // src/config/auth.js
 import jwt from "jsonwebtoken";
 
+// Use environment variable or fallback to a default (only for development)
+export const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-here";
+
 export const generateToken = (user) => {
   return jwt.sign(
     {
@@ -8,14 +11,14 @@ export const generateToken = (user) => {
       email: user.email,
       role: user.role,
     },
-    process.env.JWT_SECRET,
-    { expiresIn: "24h" }
+    JWT_SECRET,
+    { expiresIn: "7d" }
   );
 };
 
 export const verifyToken = (token) => {
   try {
-    return jwt.verify(token, process.env.JWT_SECRET);
+    return jwt.verify(token, JWT_SECRET);
   } catch (error) {
     throw new Error("Invalid token");
   }

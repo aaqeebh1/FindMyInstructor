@@ -12,15 +12,15 @@ const sql = postgres(connectionString, {
 });
 
 // Test the connection
-async function testConnection() {
-  try {
-    const result = await sql`SELECT NOW()`;
-    console.log("Database connected successfully!");
-  } catch (error) {
-    console.error("Database connection error:", error);
-  }
-}
+// async function testConnection() {
+//   try {
+//     const result = await sql`SELECT NOW()`;
+//     console.log("Database connected successfully!");
+//   } catch (error) {
+//     console.error("Database connection error:", error);
+//   }
+// }
 
-testConnection();
+// testConnection();
 
 export default sql;

@@ -4,6 +4,11 @@ import passport from "passport";
 import bcrypt from "bcrypt";
 import sql from "../config/db.js";
 import { generateToken } from "../config/auth.js";
+import {
+  authenticateToken,
+  authorizeUser,
+  authorizeInstructor,
+} from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -136,10 +141,14 @@ router.post("/login", async (req, res) => {
   }
 });
 
-
 router.get("/google", (req, res, next) => {
   // Store selected role in session from query parameter
   req.session.selectedRole = req.query.role;
+
+  // Store the redirect URL in session if provided
+  if (req.query.redirect) {
+    req.session.redirectUrl = req.query.redirect;
+  }
 
   // Save session before redirecting to Google
   req.session.save((err) => {
@@ -157,8 +166,8 @@ router.get(
   "/google/callback",
   (req, res, next) => {
     // Add debugging for session
-    console.log("Session at callback:", req.session);
-    console.log("Selected role from session:", req.session.selectedRole);
+    // console.log("Session at callback:", req.session);
+    // console.log("Selected role from session:", req.session.selectedRole);
     next();
   },
   passport.authenticate("google", {
@@ -173,26 +182,49 @@ router.get(
         throw new Error("No user data from Google OAuth");
       }
 
+      // Check if the user exists in our database
+      const users = await sql`
+        SELECT * FROM users WHERE email = ${req.user.email}
+      `;
+
+      // If the user doesn't exist in our database, redirect to login with error
+      if (users.length === 0) {
+        return res.redirect(
+          "/login?error=account_required&message=Please register first before using Google sign-in"
+        );
+      }
+
+      // User exists, use the database user information
+      const existingUser = users[0];
+
       // Generate token
       const token = generateToken({
-        id: req.user.id,
-        email: req.user.email,
-        role: req.user.role,
+        id: existingUser.id,
+        email: existingUser.email,
+        role: existingUser.role,
       });
 
       // Store in session and save
       req.session.token = token;
       req.session.user = {
-        id: req.user.id,
-        name: req.user.name,
-        email: req.user.email,
-        role: req.user.role,
+        id: existingUser.id,
+        name: existingUser.name,
+        email: existingUser.email,
+        role: existingUser.role,
       };
 
       await req.session.save();
 
+      // Use custom redirect URL if provided in session, otherwise use default
+      const redirectUrl = req.session.redirectUrl
+        ? decodeURIComponent(req.session.redirectUrl)
+        : "http://localhost:5000/logged-in"; // Changed to match your frontend CORS origin
+
+      // Clear the stored redirectUrl from session
+      delete req.session.redirectUrl;
+
       // Redirect to frontend with token
-      res.redirect(`http://localhost:3000/oauth-success?token=${token}`);
+      res.redirect(`${redirectUrl}?token=${token}`);
     } catch (error) {
       console.error("Google auth callback error:", error);
       res.redirect("/login?error=oauth_failed");
@@ -200,8 +232,32 @@ router.get(
   }
 );
 
-// Add role selection route
+// Example usage in a route file
 
+// Public route - no authentication needed
+router.get("/public-data", (req, res) => {
+  // Anyone can access
+});
+
+// Protected route - any authenticated user can access
+router.get("/protected-data", authenticateToken, (req, res) => {
+  // Only authenticated users can access
+});
+
+// User-specific route - only the specific user can access
+router.get(
+  "/users/:userId/profile",
+  authenticateToken,
+  authorizeUser,
+  (req, res) => {
+    // Only the user with matching ID can access
+  }
+);
+
+// Instructor-only route - only users with instructor role can access
+router.post("/courses", authenticateToken, authorizeInstructor, (req, res) => {
+  // Only instructors can create courses
+});
 
 // Add a route to debug session data
 router.get("/debug-session", (req, res) => {
@@ -214,20 +270,25 @@ router.get("/debug-session", (req, res) => {
 });
 
 router.get("/logout", (req, res) => {
-  // Clear the session
-  req.session.destroy((err) => {
+  // First logout from passport with proper callback
+  req.logout(function (err) {
     if (err) {
-      console.error("Session destruction error:", err);
+      console.error("Logout error:", err);
       return res.status(500).json({ message: "Error during logout" });
     }
 
-    // Logout from passport
-    req.logout((err) => {
+    // Then destroy the session
+    req.session.destroy(function (err) {
       if (err) {
-        console.error("Passport logout error:", err);
-        return res.status(500).json({ message: "Error during logout" });
+        console.error("Session destruction error:", err);
+        return res.status(500).json({ message: "Error clearing session" });
       }
-      res.redirect(process.env.FRONTEND_URL || "http://localhost:3000");
+
+      // Clear the cookie if needed
+      res.clearCookie("connect.sid");
+
+      // Respond with success message
+      return res.json({ message: "Logged out successfully" });
     });
   });
 });
