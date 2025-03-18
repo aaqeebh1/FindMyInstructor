@@ -9,6 +9,7 @@ import {
   authorizeUser,
   authorizeInstructor,
 } from "../middleware/auth.js";
+import { isProfileOwner, isPostcodeOwner } from "../middleware/permissions.js";
 
 const router = express.Router();
 
@@ -315,5 +316,169 @@ router.get("/test-oauth", (req, res) => {
   };
   res.redirect("/auth/select-role");
 });
+
+// PUBLIC ROUTES - Accessible to all users including learners
+
+// Get all instructor profiles - public
+router.get("/profiles", async (req, res) => {
+  try {
+    const profiles = await sql`
+      SELECT ip.*, u.name, u.email 
+      FROM instructor_profiles ip
+      JOIN users u ON ip.user_id = u.id
+    `;
+    res.json(profiles);
+  } catch (error) {
+    console.error("Error fetching instructor profiles:", error);
+    res.status(500).json({ message: "Error fetching profiles" });
+  }
+});
+
+// Get specific instructor profile - public
+router.get("/profiles/:profileId", async (req, res) => {
+  try {
+    const profileId = parseInt(req.params.profileId);
+    const profiles = await sql`
+      SELECT ip.*, u.name, u.email 
+      FROM instructor_profiles ip
+      JOIN users u ON ip.user_id = u.id
+      WHERE ip.id = ${profileId}
+    `;
+
+    if (profiles.length === 0) {
+      return res.status(404).json({ message: "Profile not found" });
+    }
+
+    res.json(profiles[0]);
+  } catch (error) {
+    console.error("Error fetching instructor profile:", error);
+    res.status(500).json({ message: "Error fetching profile" });
+  }
+});
+
+// Get instructor's postcodes - public
+router.get("/profiles/:profileId/postcodes", async (req, res) => {
+  try {
+    const profileId = parseInt(req.params.profileId);
+    const postcodes = await sql`
+      SELECT * FROM instructor_postcodes
+      WHERE profile_id = ${profileId}
+    `;
+    res.json(postcodes);
+  } catch (error) {
+    console.error("Error fetching instructor postcodes:", error);
+    res.status(500).json({ message: "Error fetching postcodes" });
+  }
+});
+
+// INSTRUCTOR PROTECTED ROUTES - Only accessible to instructors for their own profiles
+
+// Get current instructor's profile
+router.get(
+  "/my-profile",
+  authenticateToken,
+  authorizeInstructor,
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const profiles = await sql`
+      SELECT * FROM instructor_profiles
+      WHERE user_id = ${userId}
+    `;
+
+      if (profiles.length === 0) {
+        return res.status(404).json({ message: "Profile not found" });
+      }
+
+      res.json(profiles[0]);
+    } catch (error) {
+      console.error("Error fetching instructor profile:", error);
+      res.status(500).json({ message: "Error fetching profile" });
+    }
+  }
+);
+
+// Update instructor's own profile
+router.put(
+  "/profiles/:profileId",
+  authenticateToken,
+  authorizeInstructor,
+  isProfileOwner,
+  async (req, res) => {
+    try {
+      const { years_experience, hourly_rate, bio } = req.body;
+      const profileId = parseInt(req.params.profileId);
+
+      const [updatedProfile] = await sql`
+        UPDATE instructor_profiles
+        SET 
+          years_experience = ${years_experience},
+          hourly_rate = ${hourly_rate},
+          bio = ${bio},
+          updated_at = NOW()
+        WHERE id = ${profileId}
+        RETURNING *
+      `;
+
+      res.json(updatedProfile);
+    } catch (error) {
+      console.error("Error updating instructor profile:", error);
+      res.status(500).json({ message: "Error updating profile" });
+    }
+  }
+);
+
+// Add postcode to instructor's profile
+router.post(
+  "/profiles/:profileId/postcodes",
+  authenticateToken,
+  authorizeInstructor,
+  isProfileOwner,
+  async (req, res) => {
+    try {
+      const { postcode } = req.body;
+      const profileId = parseInt(req.params.profileId);
+
+      const [newPostcode] = await sql`
+        INSERT INTO instructor_postcodes (
+          profile_id, 
+          postcode
+        ) VALUES (
+          ${profileId}, 
+          ${postcode}
+        )
+        RETURNING *
+      `;
+
+      res.status(201).json(newPostcode);
+    } catch (error) {
+      console.error("Error adding instructor postcode:", error);
+      res.status(500).json({ message: "Error adding postcode" });
+    }
+  }
+);
+
+// Remove postcode from instructor's profile
+router.delete(
+  "/postcodes/:postcodeId",
+  authenticateToken,
+  authorizeInstructor,
+  isPostcodeOwner,
+  async (req, res) => {
+    try {
+      const postcodeId = parseInt(req.params.postcodeId);
+
+      await sql`
+        DELETE FROM instructor_postcodes
+        WHERE id = ${postcodeId}
+      `;
+
+      res.json({ message: "Postcode removed successfully" });
+    } catch (error) {
+      console.error("Error removing instructor postcode:", error);
+      res.status(500).json({ message: "Error removing postcode" });
+    }
+  }
+);
 
 export default router;
